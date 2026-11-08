@@ -655,7 +655,7 @@ final class MediaController extends Controller
             return Json::error('Media not found', 404);
         }
 
-        $path = rtrim($directory, '/\\') . \DIRECTORY_SEPARATOR . $meta['filename'];
+        $path = rtrim($directory, '/\\') . \DIRECTORY_SEPARATOR . \Grafida\Media\FileNames::sanitise($meta['filename']);
 
         if (@file_put_contents($path, $data) === false) {
             return Json::error('Could not write the file', 500);

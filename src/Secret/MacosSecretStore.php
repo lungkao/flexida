@@ -31,13 +31,15 @@ final class MacosSecretStore implements SecretStore
     public function set(string $reference, string $secret): void
     {
         // -U updates the item if it already exists instead of failing.
-        [$code, , $stderr] = $this->runner->run([
-            self::SECURITY, 'add-generic-password',
-            '-U',
-            '-s', self::SERVICE,
-            '-a', $reference,
-            '-w', $secret,
-        ]);
+        // The secret goes to `security -i` on standard input, hex-encoded, never in the argument vector where any
+        // local process could read it with `ps`. Hex also means no quoting rules can be broken by the secret.
+        $command = sprintf(
+            "add-generic-password -U -s \"%s\" -a \"%s\" -X %s\n",
+            addcslashes(self::SERVICE, '"\\'),
+            addcslashes($reference, '"\\'),
+            bin2hex($secret),
+        );
+        [$code, , $stderr] = $this->runner->run([self::SECURITY, '-i'], $command);
 
         if ($code !== 0) {
             throw new SecretStoreException('Keychain write failed: ' . trim($stderr));

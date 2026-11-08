@@ -538,6 +538,16 @@ final class PublishService
      */
     private function uploadInlineImage(Draft $draft, Site $site, string $base, string $token, ?int $mediaId, ?string $dataUri): array
     {
+        if ($mediaId !== null) {
+            // A blob that belongs to another draft is not this article's to publish: article HTML coming from a
+            // remote site or an imported file could otherwise name any local image by id.
+            $blobMeta = $this->media->findMeta($mediaId);
+
+            if ($blobMeta !== null && $blobMeta['draft_id'] !== null && $draft->id !== null && (int) $blobMeta['draft_id'] !== $draft->id) {
+                throw new \Grafida\Joomla\ApiException('The article refers to a local image that belongs to another article, so it was not published.');
+            }
+        }
+
         if ($mediaId !== null && $this->media->find($mediaId) === null) {
             if ($dataUri === null) {
                 throw new \Grafida\Joomla\ApiException(

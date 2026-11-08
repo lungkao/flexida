@@ -139,6 +139,13 @@ final class SiteService
         }
 
         $root          = ApiClient::normaliseRoot($url);
+
+        // The stored token belongs to the stored address: pointing the site elsewhere must come with a new token,
+        // or the old one would be sent to whatever host was typed.
+        if ($token === null && !self::sameOrigin($root, $existing->baseUrl)) {
+            throw new \InvalidArgumentException('Enter the API token again when you change the site address.');
+        }
+
         $effectiveToken = $token ?? $this->tokenFor($existing);
 
         if ($effectiveToken === null) {
@@ -211,5 +218,25 @@ final class SiteService
         }
 
         return [null, $token];
+    }
+
+    /** Whether two site addresses share scheme, host and port. */
+    public static function sameOrigin(string $a, string $b): bool
+    {
+        $origin = static function (string $url): string {
+            $p = parse_url($url);
+
+            if (!is_array($p) || !isset($p['host'])) {
+                return '';
+            }
+
+            $scheme = strtolower($p['scheme'] ?? 'https');
+
+            return $scheme . '://' . strtolower($p['host']) . ':' . ($p['port'] ?? ($scheme === 'http' ? 80 : 443));
+        };
+
+        $x = $origin($a);
+
+        return $x !== '' && $x === $origin($b);
     }
 }

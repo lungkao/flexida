@@ -10,6 +10,12 @@ Grafida 1.0
 # [HIGH] Clicking a sidebar menu item while editing an article discarded unsaved changes without asking (gh-80)
 # [HIGH] Publishing an article with a tag that did not exist on the site yet failed with "Invalid field: Parent"
 # [MEDIUM] Users without Edit State, such as Authors, got HTTP 500 updating an article that was ever published
+# [MEDIUM] An imported .grafida file could name a media file with a path such as ../../x and 'Save to disk' would write outside the chosen folder
+# [MEDIUM] The macOS keychain write put the token or API key in the command line of a process any local user could list; it now goes over stdin
+# [MEDIUM] Diagnose Connection, and saving a site with a new address but no token, sent the stored API token to whatever address was typed
+# [LOW] AI replies could load remote images and carry CSS url()/fixed positioning; remote images and those style declarations are now removed
+# [LOW] Publishing refuses a local image that belongs to another article (article HTML could name any local image by id)
+# [LOW] Build scripts: the runtime download now fails closed without a published checksum; the docs uploader refuses unsafe file names
 
 Grafida 0.3
 ================================================================================

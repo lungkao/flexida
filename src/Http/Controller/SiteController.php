@@ -92,6 +92,11 @@ final class SiteController extends Controller
             $site   = $siteId > 0 ? $this->sites->find($siteId) : null;
 
             if ($site !== null) {
+                // Never hand a site's stored token to a different address than the site's own.
+                if ($url !== '' && !\Grafida\Site\SiteService::sameOrigin(\Grafida\Joomla\ApiClient::normaliseRoot($url), $site->baseUrl)) {
+                    return Json::error('Enter the API token to test a different address.', 400);
+                }
+
                 $token = $this->sites->tokenFor($site) ?? '';
             }
         }

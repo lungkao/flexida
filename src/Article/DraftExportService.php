@@ -550,7 +550,7 @@ final class DraftExportService
         $mediaId = $this->media->store(
             $siteId,
             $draftId,
-            is_string($entry['filename'] ?? null) ? $entry['filename'] : 'image.png',
+            \Grafida\Media\FileNames::sanitise(is_string($entry['filename'] ?? null) ? $entry['filename'] : 'image.png'),
             is_string($entry['mime'] ?? null) ? $entry['mime'] : 'image/png',
             $data,
         );

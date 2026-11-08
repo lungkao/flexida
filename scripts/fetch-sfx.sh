@@ -67,7 +67,11 @@ for asset in "${ASSETS[@]}"; do
       continue
     fi
   else
-    echo "  (no .sha256 published — skipping checksum verification)"
+    # Fail closed: an unverified runtime becomes the executable inside every shipped binary.
+    echo "  ✗ no .sha256 published for $asset — refusing to use an unverified runtime" >&2
+    rm -f "$tmp"
+    FAILED=1
+    continue
   fi
 
   mv "$tmp" "$target"

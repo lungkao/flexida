@@ -25,6 +25,16 @@ final class MacosSecretStoreTest extends TestCase
 
             public function run(array $command, ?string $stdin = null): array
             {
+                // Writes go to `security -i` on stdin, hex-encoded: the secret must never be in argv.
+                if (($command[1] ?? '') === '-i') {
+                    TestCase::assertNotNull($stdin);
+                    TestCase::assertSame(['/usr/bin/security', '-i'], $command);
+                    TestCase::assertMatchesRegularExpression('/^add-generic-password -U -s "[^"]+" -a "([^"]+)" -X ([0-9a-f]+)\n$/', $stdin);
+                    preg_match('/-a "([^"]+)" -X ([0-9a-f]+)/', $stdin, $m);
+
+                    return $this->store($m[1], (string) hex2bin($m[2]));
+                }
+
                 $sub = $command[1] ?? '';
                 $account = $this->arg($command, '-a');
 
@@ -65,6 +75,10 @@ final class MacosSecretStoreTest extends TestCase
 
         $store->set('ref-1', 'my-token');
         self::assertSame('my-token', $store->get('ref-1'));
+
+        // A secret full of shell and quoting characters survives untouched, and never appears in argv.
+        $store->set('ref-2', 'a"b\'c\\d e');
+        self::assertSame('a"b\'c\\d e', $store->get('ref-2'));
 
         $store->delete('ref-1');
         self::assertNull($store->get('ref-1'));

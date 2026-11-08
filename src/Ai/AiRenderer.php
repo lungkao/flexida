@@ -66,8 +66,12 @@ final class AiRenderer
             ->allowSafeElements()
             ->allowRelativeLinks()
             ->allowRelativeMedias()
+            // No absolute http(s)/data images: a remote image URL in a reply (or in prompt-injected article
+            // text) would make the app fetch it, leaking the request and whatever the URL encodes.
+            ->allowMediaSchemes([])
             ->allowAttribute('class', '*')
-            ->allowAttribute('style', '*');
+            ->allowAttribute('style', '*')
+            ->withAttributeSanitizer(new StyleAttributeSanitizer());
 
         $this->sanitizer = new HtmlSanitizer($config);
     }

@@ -131,8 +131,21 @@ shopt -s nullglob
 
 pages=("$DOCS_DIR"/*.md)
 
+# Names go into an sftp batch file one per line: refuse anything that is not a plain file name.
+for f in "${pages[@]}"; do
+  case "$(basename "$f")" in
+    *[!A-Za-z0-9._-]*) echo "Refusing to upload $f: unsafe characters in the file name." >&2; exit 1 ;;
+  esac
+done
+
 shopt -s nocaseglob
 images=("$IMAGE_DIR"/*.png "$IMAGE_DIR"/*.jpg "$IMAGE_DIR"/*.jpeg "$IMAGE_DIR"/*.gif "$IMAGE_DIR"/*.svg "$IMAGE_DIR"/*.webp)
+
+for f in "${images[@]}"; do
+  case "$(basename "$f")" in
+    *[!A-Za-z0-9._-]*) echo "Refusing to upload $f: unsafe characters in the file name." >&2; exit 1 ;;
+  esac
+done
 shopt -u nocaseglob
 
 [ ${#pages[@]} -gt 0 ] || die "no Markdown pages in $DOCS_DIR"
