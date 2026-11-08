@@ -6,7 +6,7 @@
 > [!NOTE]
 > **Flexida** is an unofficial fork of Grafida that adds support for [FLEXIcontent](https://www.flexicontent.org/)
 > (content types, secondary categories, custom fields, galleries and files). It is experimental and is **not**
-> affiliated with or endorsed by the Grafida author. See [FLEXIDA.md](FLEXIDA.md). The in-app name is still
+> affiliated with or endorsed by the Grafida author. The Joomla plugin it needs is attached to every [release](https://github.com/lungkao/flexida/releases/latest) beside the app. See [FLEXIDA.md](FLEXIDA.md). The in-app name is still
 > "Grafida" for now; the final product name is undecided.
 
 **Joomla content editing, untethered.**

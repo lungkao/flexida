@@ -25,8 +25,11 @@ On a site **without** FLEXIcontent it behaves like Grafida.
 
 ## Requirements
 
-1. The Joomla site needs the **[Flexida plugin for Joomla](https://github.com/lungkao/flexida-joomla-plugin)**
-   installed and enabled (once per site). Without it the app falls back to plain-Joomla behaviour.
+1. The Joomla site needs the **Flexida plugin for Joomla** installed and enabled (once per site). The app and the
+   plugin are published together: every [Flexida release](https://github.com/lungkao/flexida/releases/latest)
+   carries `plg_webservices_flexicontent-<version>.zip` next to the app, so one page has both downloads. Install the
+   zip in Joomla (System → Install → Extensions). Plugin source and changelog:
+   [flexida-joomla-plugin](https://github.com/lungkao/flexida-joomla-plugin). Without it the app falls back to plain-Joomla behaviour.
 2. HTTPS and a Joomla API token, as for Grafida itself.
 
 ## Status of this repository
