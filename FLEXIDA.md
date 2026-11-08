@@ -1,3 +1,6 @@
+<p align="center"><img src="assets/logo/png-flexi/grafida-flexi-128.png" alt="Flexida icon" width="96"></p>
+
+
 # Flexida — Grafida with FLEXIcontent support
 
 Flexida is a fork of [Grafida](https://github.com/grafida/grafida) (© Nicholas K. Dionysopoulos, GPL-3.0-or-later)
@@ -14,6 +17,7 @@ that lets you write and edit articles on **Joomla sites that use FLEXIcontent**,
   and **files** (several at once).
 - A roomier editor: tabs **Content / Fields & media / Settings**, each field as a card you can fold, a warning when
   no category is chosen before publishing.
+- Thai (th-TH) interface included.
 - Other FLEXIcontent field types (relation, address, phone, field groups …) keep their stored value when you edit
   an item; they cannot be edited yet.
 

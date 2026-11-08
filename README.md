@@ -1,3 +1,6 @@
+<p align="center"><img src="assets/logo/png-flexi/grafida-flexi-128.png" alt="Flexida icon" width="96"></p>
+
+
 # Grafida
 
 > [!NOTE]
