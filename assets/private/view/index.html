@@ -227,9 +227,21 @@
                         </button>
                     </div>
 
+                    <!-- Tabs: the writing area, then the wide panels for bulky fields and for settings. -->
+                    <div id="editor-tabs" class="articles-tabs editor-tabs" role="tablist" data-i18n-aria="GRAFIDA_LBL_ARTICLE_PROPERTIES">
+                        <button type="button" class="articles-tab active" role="tab" id="editor-tab-content"
+                                data-editor-tab="content" aria-selected="true" data-i18n="GRAFIDA_LBL_TAB_CONTENT">Content</button>
+                        <button type="button" class="articles-tab hidden" role="tab" id="editor-tab-fields"
+                                data-editor-tab="fields" aria-selected="false" tabindex="-1"><span data-i18n="GRAFIDA_LBL_TAB_FIELDS">Fields &amp; media</span><span class="tab-count"></span></button>
+                        <button type="button" class="articles-tab" role="tab" id="editor-tab-settings"
+                                data-editor-tab="settings" aria-selected="false" tabindex="-1" data-i18n="GRAFIDA_LBL_TAB_SETTINGS">Settings</button>
+                    </div>
+
                     <div id="tinymce-wrapper">
                         <textarea id="tinymce-editor"></textarea>
                     </div>
+                    <div id="editor-panel-fields" class="editor-panel hidden" role="tabpanel" aria-labelledby="editor-tab-fields"></div>
+                    <div id="editor-panel-settings" class="editor-panel hidden" role="tabpanel" aria-labelledby="editor-tab-settings"></div>
                 </div>
 
                 <!-- Editor metadata sidebar -->

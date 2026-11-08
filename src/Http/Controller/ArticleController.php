@@ -17,6 +17,7 @@ use Grafida\Http\Json;
 use Grafida\Http\RouteContext;
 use Grafida\Http\Router;
 use Grafida\Field\FieldCategoryScope;
+use Grafida\Flexi\FlexiSupport;
 use Grafida\Html\ContentSplitter;
 use Grafida\Http\SiteContext;
 use Grafida\Joomla\ApiClient;
@@ -47,6 +48,7 @@ final class ArticleController extends Controller
         private readonly ApiClient $apiClient,
         private readonly FieldCategoryScope $fieldScope = new FieldCategoryScope(),
         private readonly ContentSplitter $splitter = new ContentSplitter(),
+        private readonly FlexiSupport $flexi = new FlexiSupport(),
     ) {}
 
     public function registerRoutes(Router $router): void
@@ -153,7 +155,86 @@ final class ArticleController extends Controller
 
         $article = $this->apiClient->getArticle($apiBase, $token, $articleId);
 
-        return Json::ok($this->remoteArticleToDraft($siteId, $articleId, $article, $site));
+        $draft = $this->remoteArticleToDraft($siteId, $articleId, $article, $site);
+
+        return Json::ok($this->withFlexiItem($draft, $site, $token, $apiBase, $articleId));
+    }
+
+    /**
+     * On a FLEXIcontent site, overlays what only FLEXIcontent knows onto the draft read from the core article: the
+     * content type, the secondary categories and the type's text fields, so that editing and publishing again keeps
+     * them. An item without a type, or a site without the web services plugin, leaves the draft as it was (the editor
+     * then offers the type to pick). Any other failure is surfaced rather than hidden, since publishing a
+     * type-less draft of an item that has one would be wrong.
+     *
+     * @param array<string, mixed> $draft
+     *
+     * @return array<string, mixed>
+     */
+    private function withFlexiItem(array $draft, Site $site, string $token, string $apiBase, int $articleId): array
+    {
+        $types = $this->references->flexiTypes($site, false, true);
+
+        if ($types === []) {
+            return $draft;
+        }
+
+        try {
+            $item = $this->apiClient->getFlexiItem($apiBase, $token, $articleId);
+        } catch (\Grafida\Joomla\ApiException $e) {
+            if ($e->status === 404) {
+                return $draft;
+            }
+
+            throw $e;
+        }
+
+        $typeRaw = $item['type_id'] ?? null;
+        $typeId  = is_numeric($typeRaw) ? (int) $typeRaw : 0;
+
+        if ($typeId <= 0) {
+            return $draft;
+        }
+
+        $defs   = $this->flexi->describe($types)['fields'];
+        $mainRaw = $item['catid'] ?? null;
+        $mainId  = is_numeric($mainRaw) ? (int) $mainRaw : 0;
+        $cats   = [];
+
+        foreach (is_array($item['cats'] ?? null) ? $item['cats'] : [] as $cat) {
+            if (is_numeric($cat) && (int) $cat > 0 && (int) $cat !== $mainId) {
+                $cats[] = (int) $cat;
+            }
+        }
+
+        // The item's own text is exact (intro and full text are separate there), so prefer it over the core copy.
+        $draft['html'] = $this->remoteArticleBody($item);
+
+        if ($mainId > 0) {
+            $draft['catid'] = $mainId;
+        }
+
+        $tags = [];
+
+        foreach (is_array($item['tags'] ?? null) ? $item['tags'] : [] as $tag) {
+            if (is_string($tag) && $tag !== '') {
+                $tags[] = $tag;
+            }
+        }
+
+        $draft['tags'] = $tags;
+
+        $fields                              = is_array($draft['fields'] ?? null) ? $draft['fields'] : [];
+        $itemFields = [];
+
+        foreach (is_array($item['fields'] ?? null) ? $item['fields'] : [] as $fieldName => $fieldValues) {
+            $itemFields[(string) $fieldName] = $fieldValues;
+        }
+
+        $draft['fields']                     = [...$fields, ...FlexiSupport::importValues($itemFields, $defs, $typeId, is_array($item['files'] ?? null) ? $item['files'] : [])];
+        $draft['fields'][FlexiSupport::KEY] = ['typeId' => $typeId, 'cats' => array_values(array_unique($cats))];
+
+        return $draft;
     }
 
     /**

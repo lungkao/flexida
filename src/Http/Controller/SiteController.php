@@ -14,6 +14,7 @@ namespace Grafida\Http\Controller;
 use Boson\Contracts\Http\ResponseInterface;
 use Grafida\Field\FieldCategoryScope;
 use Grafida\Field\FieldSupport;
+use Grafida\Flexi\FlexiSupport;
 use Grafida\Http\Json;
 use Grafida\Http\RouteContext;
 use Grafida\Http\Router;
@@ -39,6 +40,7 @@ final class SiteController extends Controller
         private readonly FieldCategoryScope $fieldScope,
         private readonly EditorCssService $editorCss,
         private readonly ConnectionDiagnostics $diagnostics,
+        private readonly FlexiSupport $flexi = new FlexiSupport(),
     ) {}
 
     public function registerRoutes(Router $router): void
@@ -251,6 +253,12 @@ final class SiteController extends Controller
         // walk stays here, in the one place that owns the rule.
         $fieldDefs = $this->fieldScope->annotate($fieldDefs, $categories);
 
+        // FLEXIcontent sites: the content types, and the fields of every type, merged into the same
+        // partitioned list the editor already renders. A field carries `flexiTypeIds` and the SPA shows it only
+        // for the chosen type. Empty for a plain Joomla site.
+        $flexi     = $this->flexi->describe($this->references->flexiTypes($site, $refresh, $bestEffort));
+        $fieldDefs = [...$fieldDefs, ...$flexi['fields']];
+
         // The explicit refresh also re-downloads the favicon, so the SPA can
         // update the icon shown for the site without a full reload, and
         // re-discovers the editor stylesheet — a template change is exactly the
@@ -268,6 +276,7 @@ final class SiteController extends Controller
             'levels'     => $this->references->accessLevels($site, $refresh, $bestEffort),
             'languages'  => $this->references->contentLanguages($site, $refresh, $bestEffort),
             'fields'     => $this->fields->partition($fieldDefs),
+            'flexi'      => ['types' => $flexi['types']],
             // Drives the SPA's alias preview: with Unicode Aliases on, a Greek
             // title stays Greek instead of being transliterated away.
             'unicodeSlugs' => $this->references->unicodeSlugs($site, $refresh),

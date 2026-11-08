@@ -666,6 +666,25 @@ final class ApiRoutingTest extends TestCase
         self::assertStringEndsWith('.png', $json['data']['name']);
     }
 
+    public function testOpenFileCanReturnSeveralFiles(): void
+    {
+        $a = tempnam(sys_get_temp_dir(), 'grafida') . '.png';
+        $b = tempnam(sys_get_temp_dir(), 'grafida') . '.jpg';
+        file_put_contents($a, 'ONE');
+        file_put_contents($b, 'TWO');
+
+        $kernel = TestContainer::create(dialog: new StubDialog(filePaths: [$a, $b]))->get(Kernel::class);
+        [$status, $json] = $this->call($kernel, 'POST', '/api/dialog/open-file', json_encode(['filter' => 'image', 'multiple' => true]));
+
+        unlink($a);
+        unlink($b);
+
+        self::assertSame(200, $status);
+        self::assertCount(2, $json['data']['files']);
+        self::assertSame('ONE', base64_decode($json['data']['files'][0]['dataBase64']));
+        self::assertSame('image/jpeg', $json['data']['files'][1]['mime']);
+    }
+
     public function testOpenFileReturnsCancelledWhenDismissed(): void
     {
         $kernel = TestContainer::create(dialog: new StubDialog())->get(Kernel::class);

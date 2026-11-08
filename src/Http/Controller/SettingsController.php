@@ -149,6 +149,27 @@ final class SettingsController extends Controller
             default    => [],
         };
 
+        // Several files at once (a gallery): the same dialog, answered with a list.
+        if (($body['multiple'] ?? false) === true) {
+            $files = [];
+
+            foreach ($this->dialog->selectFiles(filter: $filter) as $one) {
+                $raw = is_string($one) && $one !== '' ? @file_get_contents($one) : false;
+
+                if ($raw === false) {
+                    continue;
+                }
+
+                $files[] = [
+                    'name'       => basename($one),
+                    'mime'       => self::mimeForPath($one),
+                    'dataBase64' => base64_encode($raw),
+                ];
+            }
+
+            return $files === [] ? Json::ok(['cancelled' => true]) : Json::ok(['files' => $files]);
+        }
+
         $path = $this->dialog->selectFile(filter: $filter);
 
         if ($path === null || $path === '') {

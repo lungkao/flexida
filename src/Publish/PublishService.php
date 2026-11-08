@@ -16,6 +16,7 @@ use Grafida\Article\DraftRepository;
 use Grafida\Field\FieldCategoryScope;
 use Grafida\Field\FieldSupport;
 use Grafida\Field\MediaFieldValue;
+use Grafida\Flexi\FlexiSupport;
 use Grafida\Html\ContentSplitter;
 use Grafida\Html\InlineMedia;
 use Grafida\I18n\LanguageService;
@@ -70,6 +71,7 @@ final class PublishService
         private readonly FieldCategoryScope $fieldScope = new FieldCategoryScope(),
         private readonly ContentSplitter $splitter = new ContentSplitter(),
         private readonly InlineMedia $inlineMedia = new InlineMedia(),
+        private readonly FlexiSupport $flexi = new FlexiSupport(),
     ) {}
 
     /**
@@ -93,6 +95,13 @@ final class PublishService
         }
 
         $base = $site->apiBase;
+
+        // A FLEXIcontent draft (it has a content type) goes through the FLEXIcontent web services instead.
+        $flexiSettings = FlexiSupport::fromDraftFields($draft->fields);
+
+        if ($flexiSettings !== null) {
+            return $this->publishFlexi($draft, $site, $flexiSettings, $base, $token);
+        }
 
         // Only the fields Joomla actually uses for this article's category. A
         // required field belonging to some *other* category must not block the
@@ -222,6 +231,188 @@ final class PublishService
         }
 
         return ['remoteId' => $remoteId, 'created' => $created];
+    }
+
+    /**
+     * Publishes a draft as a FLEXIcontent item: content type, main + secondary categories, tags (by name) and
+     * the type's custom fields, through `plg_webservices_flexicontent`. Offline images in the body are uploaded
+     * exactly as for a plain article. Article images, "created by alias" and fields Grafida cannot edit are not
+     * sent; on an update they keep their value on the site.
+     *
+     * @param array{typeId: int, cats: list<int>} $flexi
+     *
+     * @return array{remoteId: int, created: bool}
+     */
+    private function publishFlexi(Draft $draft, Site $site, array $flexi, string $base, string $token): array
+    {
+        $html = $this->uploadOfflineMedia($draft, $site, $base, $token);
+
+        if ($draft->id !== null && $html !== $draft->html) {
+            $draft->html = $html;
+            $this->drafts->update($draft);
+        }
+
+        $split = $this->splitter->split($html);
+        $defs  = $this->flexi->describe($this->references->flexiTypes($site))['fields'];
+
+        $attributes = [
+            'title'     => $this->normaliser->apply($draft->title),
+            'type_id'   => $flexi['typeId'],
+            'catid'     => $draft->catid,
+            'cats'      => $flexi['cats'],
+            'access'    => $draft->access,
+            'state'     => $draft->state,
+            'language'  => $draft->language,
+            'introtext' => $this->normaliser->apply($split['introtext']),
+            'fulltext'  => $this->normaliser->apply($split['fulltext']),
+            'metadesc'  => $this->normaliser->apply($draft->metadesc),
+            'metakey'   => $this->normaliser->apply($draft->metakey),
+            'tags'      => array_values($draft->tags),
+            'fields'    => FlexiSupport::valuesForType($draft->fields, $defs, $flexi['typeId'])
+                + $this->flexiImageValues($draft, $defs, $flexi['typeId'], $base, $token)
+                + $this->flexiFileValues($draft, $defs, $flexi['typeId'], $base, $token),
+        ];
+
+        if ($draft->alias !== '') {
+            $attributes['alias'] = $draft->alias;
+        }
+
+        if ($draft->remoteId === null) {
+            $item    = $this->api->createFlexiItem($base, $token, $attributes);
+            $created = true;
+        } else {
+            // The type of an existing item is not changed through this route.
+            unset($attributes['type_id']);
+            $item    = $this->api->updateFlexiItem($base, $token, $draft->remoteId, $attributes);
+            $created = false;
+        }
+
+        $this->assertArticleSaved($item, $attributes['title']);
+
+        $itemId   = $item['id'] ?? null;
+        $remoteId = is_int($itemId) ? $itemId : (is_numeric($itemId) ? (int) $itemId : ($draft->remoteId ?? 0));
+
+        if ($draft->id !== null && $remoteId > 0) {
+            $this->drafts->setRemoteId($draft->id, $remoteId);
+        }
+
+        return ['remoteId' => $remoteId, 'created' => $created];
+    }
+
+    /**
+     * The image fields of a FLEXIcontent type that hold a picture chosen on this computer: each is uploaded to the
+     * site and sent as `{file, alt}`. A field holding anything else (empty, or a picture picked from the site's own
+     * media manager, which FLEXIcontent cannot use) is left out, so the site keeps the picture it has.
+     *
+     * @param list<array<string, mixed>> $defs
+     *
+     * @return array<string, array{file: string, alt: string}|list<array{file: string, alt: string}>>
+     */
+    private function flexiImageValues(Draft $draft, array $defs, int $typeId, string $base, string $token): array
+    {
+        $out = [];
+
+        $multiple = [];
+
+        foreach ($defs as $def) {
+            if (($def['multiple'] ?? false) === true && is_string($def['name'] ?? null)) {
+                $multiple[$def['name']] = true;
+            }
+        }
+
+        foreach (FlexiSupport::imageFieldsOf($defs, $typeId) as $name) {
+            // A gallery holds a list of pictures; a single-picture field holds one record.
+            $raw     = $draft->fields[$name] ?? null;
+            $records = isset($multiple[$name]) && is_array($raw) && array_is_list($raw)
+                ? array_map(static fn ($r): array => MediaFieldValue::decode($r), $raw)
+                : [MediaFieldValue::decode($raw)];
+            $values  = [];
+
+            foreach ($records as $record) {
+                $file = $record['imagefile'];
+
+                if (!str_starts_with($file, self::MEDIA_REF_PREFIX)) {
+                    continue;
+                }
+
+                $mediaId = (int) substr($file, strlen(self::MEDIA_REF_PREFIX));
+                $blob    = $mediaId > 0 ? $this->media->find($mediaId) : null;
+
+                if ($blob === null) {
+                    continue;
+                }
+
+                $uploaded = $this->api->uploadFlexiImage($base, $token, MediaUploadTarget::safeName($blob['filename'], $mediaId), $blob['data']);
+                $stored   = $uploaded['file'] ?? null;
+
+                if (is_string($stored) && $stored !== '') {
+                    $values[] = ['file' => $stored, 'alt' => $record['alt_text']];
+                }
+            }
+
+            if ($values === []) {
+                continue;
+            }
+
+            $out[$name] = isset($multiple[$name]) ? $values : $values[0];
+        }
+
+        return $out;
+    }
+
+    /**
+     * The file fields of a FLEXIcontent item: each draft entry is either a file already on the site (`{id, name}`)
+     * or a local file (`{media, name}`) that is uploaded to the site's file manager now. A field is sent as the
+     * complete list of file ids, so a file removed in the editor is removed from the item.
+     *
+     * @param list<array<string, mixed>> $defs
+     *
+     * @return array<string, list<string>>
+     */
+    private function flexiFileValues(Draft $draft, array $defs, int $typeId, string $base, string $token): array
+    {
+        $out = [];
+
+        foreach (FlexiSupport::fileFieldsOf($defs, $typeId) as $name) {
+            if (!array_key_exists($name, $draft->fields)) {
+                continue;
+            }
+
+            $raw = $draft->fields[$name];
+            $ids = [];
+
+            foreach (is_array($raw) ? $raw : [] as $entry) {
+                $record = is_string($entry) ? json_decode($entry, true) : $entry;
+
+                if (!is_array($record)) {
+                    continue;
+                }
+
+                if (isset($record['id']) && is_numeric($record['id']) && (int) $record['id'] > 0) {
+                    $ids[] = (string) (int) $record['id'];
+
+                    continue;
+                }
+
+                $mediaId = isset($record['media']) && is_numeric($record['media']) ? (int) $record['media'] : 0;
+                $blob    = $mediaId > 0 ? $this->media->find($mediaId) : null;
+
+                if ($blob === null) {
+                    continue;
+                }
+
+                $uploaded = $this->api->uploadFlexiFile($base, $token, $blob['filename'], $blob['data']);
+                $stored   = $uploaded['id'] ?? null;
+
+                if (is_numeric($stored) && (int) $stored > 0) {
+                    $ids[] = (string) (int) $stored;
+                }
+            }
+
+            $out[$name] = $ids;
+        }
+
+        return $out;
     }
 
     /**

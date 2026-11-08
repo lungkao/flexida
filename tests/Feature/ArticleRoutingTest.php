@@ -273,6 +273,108 @@ final class ArticleRoutingTest extends TestCase
         ], $json['data']['fields']);
     }
 
+    /** @param list<array<string, mixed>> $types */
+    private function seedFlexiTypes(int $siteId, array $types): void
+    {
+        \assert($this->lastDb !== null);
+
+        (new ReferenceRepository($this->lastDb))->put($siteId, ReferenceService::KIND_FLEXI, $types);
+    }
+
+    /** A core article resource, as the `content/articles` API returns it. */
+    private function coreArticle(int $id): string
+    {
+        return json_encode(['data' => [
+            'type'          => 'articles',
+            'id'            => (string) $id,
+            'attributes'    => ['id' => $id, 'title' => 'Core copy', 'alias' => 'core-copy', 'text' => '<p>core</p>', 'metadesc' => 'meta'],
+            'relationships' => ['category' => ['data' => ['type' => 'categories', 'id' => '8']]],
+        ]], JSON_THROW_ON_ERROR);
+    }
+
+    public function testRemoteFlexiItemCarriesTypeSecondaryCategoriesTagsAndTextFields(): void
+    {
+        $fake   = new FakeTransport();
+        $kernel = $this->kernelWithFakeTransport($fake);
+        $siteId = $this->seedConnectedSite();
+
+        $this->seedFieldDefinitions($siteId, []);
+        $this->seedFlexiTypes($siteId, [
+            ['id' => 1, 'name' => 'Article', 'alias' => 'article', 'fields' => [
+                ['name' => 'subtitle', 'label' => 'Subtitle', 'field_type' => 'text'],
+                ['name' => 'keywords', 'label' => 'Keywords', 'field_type' => 'text'],
+                ['name' => 'photo', 'label' => 'Photo', 'field_type' => 'image'],
+            ]],
+        ]);
+
+        $fake->on(self::API_BASE . '/v1/content/articles/17', new HttpResponse(200, $this->coreArticle(17)));
+        $fake->on(self::API_BASE . '/v1/flexicontent/items/17', new HttpResponse(200, json_encode(['data' => [
+            'type'       => 'flexicontent-items',
+            'id'         => '17',
+            'attributes' => [
+                'id' => 17, 'title' => 'Item', 'introtext' => '<p>Intro</p>', 'fulltext' => '<p>Rest</p>',
+                'catid' => 8, 'cats' => [9, 8, 4], 'type_id' => 1, 'access' => 1, 'language' => '*', 'state' => 1,
+                'tags' => ['เลือกตั้ง', 'งบ'],
+                // keywords holds two values (not imported); photo is an image field (not editable here).
+                'fields' => ['subtitle' => ['Sub'], 'keywords' => ['a', 'b'], 'photo' => ['p.jpg']],
+            ],
+        ]], JSON_THROW_ON_ERROR)));
+
+        [$status, $json] = $this->call($kernel, 'GET', "/api/sites/{$siteId}/articles/17");
+        $draft           = $json['data'];
+
+        self::assertSame(200, $status);
+        self::assertSame(['typeId' => 1, 'cats' => [9, 4]], $draft['fields']['_flexi']);
+        self::assertSame('Sub', $draft['fields']['subtitle']);
+        self::assertArrayNotHasKey('keywords', $draft['fields']);
+        self::assertArrayNotHasKey('photo', $draft['fields']);
+        self::assertSame(8, $draft['catid']);
+        self::assertSame(['เลือกตั้ง', 'งบ'], $draft['tags']);
+        self::assertSame("<p>Intro</p>\n<hr class=\"readmore\">\n<p>Rest</p>", $draft['html']);
+        // Metadata the FLEXIcontent route does not carry still comes from the core article.
+        self::assertSame('meta', $draft['metadesc']);
+    }
+
+    public function testRemoteItemWithoutAFlexiTypeFallsBackToTheCoreArticle(): void
+    {
+        $fake   = new FakeTransport();
+        $kernel = $this->kernelWithFakeTransport($fake);
+        $siteId = $this->seedConnectedSite();
+
+        $this->seedFieldDefinitions($siteId, []);
+        $this->seedFlexiTypes($siteId, [['id' => 1, 'name' => 'Article', 'alias' => 'article', 'fields' => []]]);
+
+        $fake->on(self::API_BASE . '/v1/content/articles/18', new HttpResponse(200, $this->coreArticle(18)));
+        $fake->on(self::API_BASE . '/v1/flexicontent/items/18', new HttpResponse(404, json_encode(['errors' => [['title' => 'Item not found', 'code' => 404]]], JSON_THROW_ON_ERROR)));
+
+        [$status, $json] = $this->call($kernel, 'GET', "/api/sites/{$siteId}/articles/18");
+
+        self::assertSame(200, $status);
+        self::assertArrayNotHasKey('_flexi', $json['data']['fields']);
+        self::assertSame('<p>core</p>', $json['data']['html']);
+        self::assertSame(8, $json['data']['catid']);
+    }
+
+    public function testPlainJoomlaSiteNeverAsksForFlexiItems(): void
+    {
+        $fake   = new FakeTransport();
+        $kernel = $this->kernelWithFakeTransport($fake);
+        $siteId = $this->seedConnectedSite();
+
+        $this->seedFieldDefinitions($siteId, []);
+        $this->seedFlexiTypes($siteId, []);
+
+        $fake->on(self::API_BASE . '/v1/content/articles/19', new HttpResponse(200, $this->coreArticle(19)));
+
+        [$status] = $this->call($kernel, 'GET', "/api/sites/{$siteId}/articles/19");
+
+        self::assertSame(200, $status);
+
+        foreach ($fake->requests as $request) {
+            self::assertStringNotContainsString('flexicontent', $request['url']);
+        }
+    }
+
     /**
      * Joomla writes its read-more as `<hr id="system-readmore">`, and the combined
      * `text` attribute an article arrives in may carry it (gh-71). The split has to

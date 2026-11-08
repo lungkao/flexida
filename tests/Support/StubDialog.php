@@ -19,6 +19,8 @@ final class StubDialog implements DialogApiInterface
     public function __construct(
         private readonly ?string $filePath = null,
         private readonly ?string $directoryPath = null,
+        /** @var list<string> */
+        private readonly array $filePaths = [],
     ) {}
 
     public function selectFile(?string $directory = null, iterable $filter = []): ?string
@@ -28,7 +30,7 @@ final class StubDialog implements DialogApiInterface
 
     public function selectFiles(?string $directory = null, iterable $filter = []): iterable
     {
-        return [];
+        return $this->filePaths;
     }
 
     public function selectDirectory(?string $directory = null, iterable $filter = []): ?string

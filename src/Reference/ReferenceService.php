@@ -36,6 +36,7 @@ final class ReferenceService
     public const KIND_FIELDS     = 'fields';
     public const KIND_LANGUAGES  = 'languages';
     public const KIND_CONFIG     = 'config';
+    public const KIND_FLEXI      = 'flexi';
 
     /**
      * The kinds a staleness check considers. Deliberately excludes
@@ -75,6 +76,46 @@ final class ReferenceService
     public function accessLevels(Site $site, bool $refresh = false, bool $bestEffort = false): array
     {
         return $this->load($site, self::KIND_LEVELS, $refresh, $bestEffort, fn (string $b, string $t) => $this->api->listAccessLevels($b, $t));
+    }
+
+    /**
+     * FLEXIcontent content types of the site, each with its custom fields, in the shape of Joomla custom field
+     * definitions (`name`, `label`, `type`, `required`) plus `flexiTypeIds` (the types a field belongs to).
+     *
+     * Empty for a site that does not run FLEXIcontent with the Grafida web services plugin; that answer is cached
+     * too, so the editor does not probe the site on every open (the refresh button probes again).
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function flexiTypes(Site $site, bool $refresh = false, bool $bestEffort = false): array
+    {
+        return $this->load($site, self::KIND_FLEXI, $refresh, $bestEffort, fn (string $b, string $t) => $this->fetchFlexiTypes($b, $t));
+    }
+
+    /** @return list<array<string, mixed>> */
+    private function fetchFlexiTypes(string $base, string $token): array
+    {
+        try {
+            $types = $this->api->listFlexiTypes($base, $token);
+        } catch (ApiException $e) {
+            if ($e->status === 404) {
+                return [];
+            }
+
+            throw $e;
+        }
+
+        foreach ($types as $index => $type) {
+            $id = $type['id'] ?? null;
+
+            if (!is_int($id) || $id <= 0) {
+                continue;
+            }
+
+            $types[$index]['fields'] = $this->api->listFlexiFields($base, $token, $id);
+        }
+
+        return $types;
     }
 
     /** @return list<array<string, mixed>> */
@@ -263,6 +304,7 @@ final class ReferenceService
         $this->tags($site, true, true);
         $this->accessLevels($site, true, true);
         $this->fields($site, true, true);
+        $this->flexiTypes($site, true, true);
         $this->contentLanguages($site, true, true);
         $this->unicodeSlugs($site, true);
     }

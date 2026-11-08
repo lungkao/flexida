@@ -33,6 +33,8 @@ final class FieldSupport
         'calendar',
         'checkboxes',
         'color',
+        // A list of files (a FLEXIcontent file field), uploaded when the article is published.
+        'file',
         'integer',
         'list',
         'media',

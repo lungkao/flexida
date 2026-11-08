@@ -268,6 +268,76 @@ final class ApiClient
         return $this->unwrapResource($response);
     }
 
+    /**
+     * The content types of a FLEXIcontent site (`plg_webservices_flexicontent`). A site without that plugin
+     * answers 404, which callers treat as "not a FLEXIcontent site".
+     *
+     * @return list<array<string, mixed>>
+     */
+    public function listFlexiTypes(string $base, string $token): array
+    {
+        return $this->collection($base, $token, 'flexicontent/types');
+    }
+
+    /** @return list<array<string, mixed>> The custom fields of one FLEXIcontent type. */
+    public function listFlexiFields(string $base, string $token, int $typeId): array
+    {
+        return $this->collection($base, $token, 'flexicontent/types/' . $typeId . '/fields');
+    }
+
+    /**
+     * @param array<string, mixed> $attributes
+     *
+     * @return array<string, mixed> The created item resource.
+     */
+    public function createFlexiItem(string $base, string $token, array $attributes): array
+    {
+        return $this->unwrapResource($this->send($base, $token, 'POST', 'flexicontent/items', 'flexicontent-items', $attributes));
+    }
+
+    /**
+     * @param array<string, mixed> $attributes
+     *
+     * @return array<string, mixed> The updated item resource.
+     */
+    public function updateFlexiItem(string $base, string $token, int $id, array $attributes): array
+    {
+        return $this->unwrapResource($this->send($base, $token, 'PATCH', 'flexicontent/items/' . $id, 'flexicontent-items', $attributes));
+    }
+
+    /**
+     * Uploads a picture to a FLEXIcontent site's upload folder (the image fields' source) and returns the
+     * resource whose `file` attribute is the stored name to put in the item's image field.
+     *
+     * @return array<string, mixed>
+     */
+    public function uploadFlexiImage(string $base, string $token, string $filename, string $contents): array
+    {
+        return $this->unwrapResource($this->send($base, $token, 'POST', 'flexicontent/images', 'flexicontent-images', [
+            'filename' => $filename,
+            'content'  => base64_encode($contents),
+        ]));
+    }
+
+    /**
+     * Stores a document in the site's FLEXIcontent file manager.
+     *
+     * @return array<string, mixed> The stored file: `id` (what a file field holds), `file`, `name`.
+     */
+    public function uploadFlexiFile(string $base, string $token, string $filename, string $contents): array
+    {
+        return $this->unwrapResource($this->send($base, $token, 'POST', 'flexicontent/files', 'flexicontent-files', [
+            'filename' => $filename,
+            'content'  => base64_encode($contents),
+        ]));
+    }
+
+    /** @return array<string, mixed> */
+    public function getFlexiItem(string $base, string $token, int $id): array
+    {
+        return $this->resource($base, $token, 'flexicontent/items/' . $id);
+    }
+
     /** @return list<array<string, mixed>> */
     public function listCategories(string $base, string $token): array
     {

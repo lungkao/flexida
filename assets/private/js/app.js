@@ -84,6 +84,8 @@ const State = {
     // Forces the "dirty" state regardless of the form snapshot — set when the user
     // re-points the draft at another site, a change the snapshot cannot capture.
     editorForceDirty: false,
+    // The editor tab on show: 'content' (the writing area), 'fields' or 'settings'.
+    editorTab: 'content',
     // The site the open draft was last persisted to; the articles list returns
     // here on leave so a draft moved (and saved) to another site stays visible,
     // while an unsaved, then discarded, move does not move the list.
@@ -749,7 +751,7 @@ const api = {
     importDraftInto: (id, payload) => apiFetch('POST', `/api/drafts/${id}/import`, { payload }),
     selectDirectory: () => apiFetch('POST', '/api/dialog/select-directory'),
     uploadMedia: (siteId, body) => apiFetch('POST', `/api/sites/${siteId}/media`, body),
-    openFile: (filter) => apiFetch('POST', '/api/dialog/open-file', { filter }),
+    openFile: (filter, multiple = false) => apiFetch('POST', '/api/dialog/open-file', multiple ? { filter, multiple: true } : { filter }),
     browseMedia: (siteId, path = '') => apiFetch('GET', `/api/sites/${siteId}/media?path=${encodeURIComponent(path)}`),
     getMediaBlob: (id) => apiFetch('GET', `/api/media/${id}`),
     getMediaTarget: (id) => apiFetch('GET', `/api/media/${id}/target`),
@@ -3037,6 +3039,11 @@ function resetEditorScreen() {
 
     const sidebar = document.getElementById('editor-sidebar-inner');
     if (sidebar) clearNode(sidebar);
+    ['editor-panel-fields', 'editor-panel-settings'].forEach(id => {
+        const panel = document.getElementById(id);
+        if (panel) clearNode(panel);
+    });
+    setEditorTab('content');
 
     const titleInput = document.getElementById('editor-title-input');
     if (titleInput) titleInput.value = '';
@@ -3109,6 +3116,39 @@ function applyEditorCssToOpenEditor() {
     } catch {}
 }
 
+/**
+ * A collapsible group of the editor sidebar (a native <details>, so it needs no script to open or close and is
+ * keyboard- and screen-reader-friendly for free). `summary` is a short line shown next to the title while the group
+ * is closed, so a collapsed group still says what is inside it. Open/closed is remembered per group.
+ */
+function sidebarSection(key, title, bodyNodes, { open = false, summary = '' } = {}) {
+    const details = document.createElement('details');
+    details.className = 'sb-section';
+    details.dataset.sbKey = key;
+
+    let remembered = null;
+    try { remembered = window.localStorage.getItem('grafida.sb.' + key); } catch {}
+    details.open = remembered === null ? open : remembered === '1';
+    details.addEventListener('toggle', () => {
+        try { window.localStorage.setItem('grafida.sb.' + key, details.open ? '1' : '0'); } catch {}
+    });
+
+    const head = document.createElement('summary');
+    head.appendChild(el('span', 'sb-section-title', title));
+    if (summary) head.appendChild(el('span', 'sb-section-hint', summary));
+    const chevron = document.createElement('i');
+    chevron.className = 'fa-solid fa-chevron-down sb-section-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    head.appendChild(chevron);
+    details.appendChild(head);
+
+    const body = el('div', 'sb-section-body');
+    bodyNodes.forEach(node => body.appendChild(node));
+    details.appendChild(body);
+
+    return details;
+}
+
 function renderEditorSidebar(draft) {
     const sidebar = document.getElementById('editor-sidebar-inner');
     clearNode(sidebar);
@@ -3130,73 +3170,245 @@ function renderEditorSidebar(draft) {
     const aliasInput = document.getElementById('editor-alias-input');
     if (aliasInput) aliasInput.value = draft.alias || '';
 
-    // Site this draft belongs to. Re-pointing it at another site unlinks it from
-    // any remote article (the user is warned first) — see changeEditorSite().
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_SITE'), buildSiteSelect(draft.siteId)));
+    // The editor is split by how much room each thing needs. The narrow sidebar keeps only what is quick to set
+    // (type, status, categories, tags); anything bulky or rarely touched lives in the tabs above the writing area,
+    // which are as wide as the window: "Fields & media" (the type's custom fields, pictures, galleries) and
+    // "Settings" (publishing, SEO). See setEditorTab().
+    const siteSel = buildSiteSelect(draft.siteId);
+    const statusSel = buildStatusSelect(draft.state);
+    const categorySel = buildCategorySelect(refs.categories, draft.catid);
+    const accessSel = buildAccessSelect(refs.levels, draft.access);
+    const languageSel = buildLanguageSelect(refs.languages || [], draft.language);
+    const flexi = buildFlexiControls(refs, draft); // [type group, more-categories group] or [] on a plain site
 
-    // Status (Joomla published state). The Publish button is a sync/push; this
-    // controls the state the article is given on the site, independent of pushing.
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_STATUS'), buildStatusSelect(draft.state)));
+    // Type and status: the two settings that decide the rest of the form, always in view.
+    const top = el('div', 'sb-top');
+    if (flexi.length) top.appendChild(flexi[0]);
+    top.appendChild(formGroup(t('GRAFIDA_LBL_STATUS'), statusSel));
+    sidebar.appendChild(top);
 
-    // Category
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_CATEGORY'), buildCategorySelect(refs.categories, draft.catid)));
+    // Categories and tags.
+    const catNodes = [formGroup(t('GRAFIDA_LBL_CATEGORY'), categorySel)];
+    if (flexi.length > 1) catNodes.push(flexi[1]);
+    catNodes.push(formGroup(t('GRAFIDA_LBL_TAGS'), buildTagsInput(refs.tags, draft.tags || [])));
+    sidebar.appendChild(sidebarSection('cats', t('GRAFIDA_LBL_SB_CATS_TAGS'), catNodes, { open: true }));
 
-    // Access
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_ACCESS'), buildAccessSelect(refs.levels, draft.access)));
+    // A way into the wide tab from the narrow column.
+    const toFields = el('button', 'btn btn-secondary btn-sm sb-open-fields');
+    toFields.id = 'editor-open-fields';
+    toFields.type = 'button';
+    toFields.appendChild(el('span', null, t('GRAFIDA_LBL_TAB_FIELDS')));
+    toFields.appendChild(el('span', 'sb-open-fields-count'));
+    toFields.addEventListener('click', () => setEditorTab('fields'));
+    sidebar.appendChild(toFields);
 
-    // Language — the site's installed CONTENT languages, not the app's UI languages.
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_LANGUAGE'), buildLanguageSelect(refs.languages || [], draft.language)));
+    // ---- Wide tab: Fields & media ----
+    const fieldsPanel = document.getElementById('editor-panel-fields');
+    if (fieldsPanel) {
+        clearNode(fieldsPanel);
 
-    // Tags
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_TAGS'), buildTagsInput(refs.tags, draft.tags || [])));
+        // Joomla's intro / full-text article images. A FLEXIcontent item keeps its pictures in its own image
+        // fields, so this pair is hidden while a FLEXIcontent type is chosen (see syncImagesVisibility()).
+        const imagesWrap = el('section', 'panel-card', renderImagesSection(draft.siteId));
+        imagesWrap.id = 'editor-images-wrap';
+        fieldsPanel.appendChild(imagesWrap);
 
-    // Reload the site's reference metadata (categories, tags, access levels,
-    // languages, custom fields). Sits directly under Tags — close to the
-    // Category / Access / Language / Tags group it refreshes above, and the
-    // custom-field definitions below, rather than being promoted out of
-    // proportion to its importance by sitting at the very top (gh-42).
-    // applyRefreshedReferences() (called from reloadSiteMetadata()) re-renders
-    // the sidebar afterwards, preserving the current unsaved selections.
-    const reloadBtn = iconBtn('arrows-rotate', t('GRAFIDA_BTN_RELOAD_METADATA'), 'btn', 'btn-sm', 'btn-secondary');
-    reloadBtn.addEventListener('click', async () => {
-        await reloadSiteMetadata(draft.siteId, reloadBtn);
-    });
-    sidebar.appendChild(el('div', 'sidebar-reload', reloadBtn));
-
-    // Custom fields, scoped to the article's category — repainted on its own
-    // whenever the Category drop-down changes. See renderCustomFields().
-    const customFields = el('div', null);
-    customFields.id = 'editor-custom-fields';
-    sidebar.appendChild(customFields);
+        // The article's own fields (custom fields of its type / category), painted by renderCustomFields() and
+        // repainted whenever the type or category changes.
+        const customFields = el('div', 'panel-custom-fields');
+        customFields.id = 'editor-custom-fields';
+        fieldsPanel.appendChild(customFields);
+    }
     renderCustomFields(draft);
+    syncImagesVisibility(draft);
 
-    // Created by Alias — the by-line Joomla shows instead of the real author's
-    // name. Empty (the default) credits the account the article is published under.
-    const createdByAliasEl = document.createElement('input');
-    createdByAliasEl.id = 'editor-created-by-alias';
-    createdByAliasEl.type = 'text';
-    createdByAliasEl.className = 'form-control';
-    createdByAliasEl.value = draft.createdByAlias || '';
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_CREATED_BY_ALIAS'), createdByAliasEl));
+    // ---- Wide tab: Settings ----
+    const settingsPanel = document.getElementById('editor-panel-settings');
+    if (settingsPanel) {
+        clearNode(settingsPanel);
 
-    // Meta description
-    const metadescEl = document.createElement('textarea');
-    metadescEl.id = 'editor-metadesc';
-    metadescEl.className = 'form-control';
-    metadescEl.rows = 3;
-    metadescEl.value = draft.metadesc || '';
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_METADESC'), metadescEl));
+        const createdByAliasEl = document.createElement('input');
+        createdByAliasEl.id = 'editor-created-by-alias';
+        createdByAliasEl.type = 'text';
+        createdByAliasEl.className = 'form-control';
+        createdByAliasEl.value = draft.createdByAlias || '';
 
-    // Keywords (Joomla 4+ dropped the "Meta" prefix on this label)
-    const metakeyEl = document.createElement('input');
-    metakeyEl.id = 'editor-metakey';
-    metakeyEl.type = 'text';
-    metakeyEl.className = 'form-control';
-    metakeyEl.value = draft.metakey || '';
-    sidebar.appendChild(formGroup(t('GRAFIDA_LBL_METAKEY'), metakeyEl));
+        const metadescEl = document.createElement('textarea');
+        metadescEl.id = 'editor-metadesc';
+        metadescEl.className = 'form-control';
+        metadescEl.rows = 3;
+        metadescEl.value = draft.metadesc || '';
 
-    // Intro / full-text article images (Joomla's "Images and Links" tab).
-    sidebar.appendChild(renderImagesSection(draft.siteId));
+        const metakeyEl = document.createElement('input');
+        metakeyEl.id = 'editor-metakey';
+        metakeyEl.type = 'text';
+        metakeyEl.className = 'form-control';
+        metakeyEl.value = draft.metakey || '';
+
+        const publishingCard = el('section', 'panel-card');
+        publishingCard.appendChild(el('h3', 'panel-card-title', t('GRAFIDA_LBL_SB_PUBLISHING')));
+        publishingCard.appendChild(formGroup(t('GRAFIDA_LBL_SITE'), siteSel));
+        publishingCard.appendChild(formGroup(t('GRAFIDA_LBL_ACCESS'), accessSel));
+        // The site's installed CONTENT languages, not the app's UI languages.
+        publishingCard.appendChild(formGroup(t('GRAFIDA_LBL_LANGUAGE'), languageSel));
+        publishingCard.appendChild(formGroup(t('GRAFIDA_LBL_CREATED_BY_ALIAS'), createdByAliasEl));
+
+        const seoCard = el('section', 'panel-card');
+        seoCard.appendChild(el('h3', 'panel-card-title', t('GRAFIDA_LBL_SB_SEO')));
+        seoCard.appendChild(formGroup(t('GRAFIDA_LBL_METADESC'), metadescEl));
+        seoCard.appendChild(formGroup(t('GRAFIDA_LBL_METAKEY'), metakeyEl));
+
+        // Reload the site's reference metadata (categories, tags, access levels, languages, custom fields). A small
+        // maintenance action, so it lives with the settings (gh-42). applyRefreshedReferences() (called from
+        // reloadSiteMetadata()) re-renders the sidebar afterwards, preserving the current unsaved selections.
+        const reloadBtn = iconBtn('arrows-rotate', t('GRAFIDA_BTN_RELOAD_METADATA'), 'btn', 'btn-sm', 'btn-secondary');
+        reloadBtn.addEventListener('click', async () => {
+            await reloadSiteMetadata(draft.siteId, reloadBtn);
+        });
+        const maintenance = el('section', 'panel-card', el('h3', 'panel-card-title', t('GRAFIDA_LBL_SITE')), reloadBtn);
+
+        const grid = el('div', 'panel-grid', publishingCard, seoCard, maintenance);
+        settingsPanel.appendChild(grid);
+    }
+
+    syncEditorTabs();
+}
+
+/** The tabs above the writing area. `content` is the writing area itself. */
+const EDITOR_TABS = ['content', 'fields', 'settings'];
+
+/**
+ * Shows one of the editor's tabs. The writing area is only hidden, never torn down, so switching tabs keeps the
+ * cursor, the undo history and any unsaved text. Every input of every tab stays in the DOM, so what collectDraftFormData()
+ * reads does not depend on which tab is showing.
+ */
+function setEditorTab(tab) {
+    if (!EDITOR_TABS.includes(tab)) tab = 'content';
+    State.editorTab = tab;
+
+    const wrapper = document.getElementById('tinymce-wrapper');
+    if (wrapper) wrapper.classList.toggle('editor-tab-off', tab !== 'content');
+    EDITOR_TABS.filter(name => name !== 'content').forEach(name => {
+        const panel = document.getElementById('editor-panel-' + name);
+        if (panel) panel.classList.toggle('hidden', tab !== name);
+    });
+    document.querySelectorAll('#editor-tabs [data-editor-tab]').forEach(btn => {
+        const active = btn.dataset.editorTab === tab;
+        btn.classList.toggle('active', active);
+        btn.setAttribute('aria-selected', active ? 'true' : 'false');
+        btn.tabIndex = active ? 0 : -1;
+    });
+
+    // The editor measured itself while it was hidden; ask it to lay out again.
+    if (tab === 'content' && State.tinyMCEEditor) {
+        try { window.dispatchEvent(new Event('resize')); } catch {}
+    }
+}
+
+/** Keeps the tab strip in step with what is on offer: no "Fields & media" tab when there is nothing to put in it. */
+function syncEditorTabs() {
+    const panel = document.getElementById('editor-panel-fields');
+    const hasFields = !!(panel && panel.querySelector('.panel-custom-fields > *'));
+    const hasImages = !!(panel && document.getElementById('editor-images-wrap') && !document.getElementById('editor-images-wrap').classList.contains('hidden'));
+    const show = hasFields || hasImages;
+
+    const tabBtn = document.getElementById('editor-tab-fields');
+    if (tabBtn) {
+        tabBtn.classList.toggle('hidden', !show);
+        const count = panel ? panel.querySelectorAll('.panel-custom-fields .form-group').length : 0;
+        const badge = tabBtn.querySelector('.tab-count');
+        if (badge) badge.textContent = count > 0 ? String(count) : '';
+    }
+    const open = document.getElementById('editor-open-fields');
+    if (open) {
+        open.classList.toggle('hidden', !show);
+        const count = panel ? panel.querySelectorAll('.panel-custom-fields .form-group').length : 0;
+        const badge = open.querySelector('.sb-open-fields-count');
+        if (badge) badge.textContent = count > 0 ? String(count) : '';
+    }
+
+    if (!show && State.editorTab === 'fields') setEditorTab('content');
+}
+
+/** Hides the Joomla intro/full-text image pair while a FLEXIcontent type is chosen (its pictures are custom fields). */
+function syncImagesVisibility(draft) {
+    const wrap = document.getElementById('editor-images-wrap');
+    if (wrap) wrap.classList.toggle('hidden', flexiTypeOf(draft) > 0);
+    syncEditorTabs();
+}
+
+/**
+ * The FLEXIcontent type id in effect (0 = a plain Joomla article): what the sidebar's type select shows when it is
+ * on screen (a new draft shows the site's first type before anything is saved into the draft), otherwise what the
+ * draft holds.
+ */
+function flexiTypeOf(draft) {
+    const select = document.getElementById('editor-flexi-type');
+    if (select) return select.value ? Number(select.value) : 0;
+    return draftFlexiType(draft);
+}
+
+/** The type stored in the draft itself, ignoring the sidebar. */
+function draftFlexiType(draft) {
+    const f = draft && draft.fields && draft.fields._flexi;
+    return f && Number(f.typeId) > 0 ? Number(f.typeId) : 0;
+}
+
+/**
+ * The extra sidebar controls of a FLEXIcontent site: the content type, and the secondary categories an item can
+ * sit in besides its main category. Returns [] for a plain Joomla site. The chosen values travel in the draft's
+ * `fields._flexi` (see collectDraftFormData()), so no draft or file format change is needed.
+ */
+function buildFlexiControls(refs, draft) {
+    const types = (refs.flexi && refs.flexi.types) || [];
+    if (!types.length) return [];
+
+    const current = draft.fields && draft.fields._flexi;
+    // A new draft starts with the site's first type; an article imported from the site keeps whatever it had.
+    let typeId = draftFlexiType(draft);
+    if (!current && draft.remoteId == null) typeId = Number(types[0].id);
+
+    const typeSel = document.createElement('select');
+    typeSel.id = 'editor-flexi-type';
+    typeSel.className = 'form-control';
+    const none = document.createElement('option');
+    none.value = '';
+    none.textContent = t('GRAFIDA_OPT_FLEXI_NONE');
+    typeSel.appendChild(none);
+    types.forEach(type => {
+        const opt = document.createElement('option');
+        opt.value = String(type.id);
+        opt.textContent = type.name;
+        if (Number(type.id) === typeId) opt.selected = true;
+        typeSel.appendChild(opt);
+    });
+    // The type decides which custom fields are shown, like the category does for Joomla fields.
+    typeSel.addEventListener('change', () => {
+        if (!State.currentDraft) return;
+        const now = collectDraftFormData();
+        State.currentDraft.fields = now.fields;
+        renderCustomFields({ ...State.currentDraft, ...now });
+        syncImagesVisibility({ ...State.currentDraft, ...now });
+    });
+
+    const catsSel = document.createElement('select');
+    catsSel.id = 'editor-flexi-cats';
+    catsSel.className = 'form-control';
+    catsSel.multiple = true;
+    catsSel.size = 5;
+    const chosen = new Set(((current && current.cats) || []).map(Number));
+    categoryTreeOptions(refs.categories).forEach(([id, label]) => {
+        const opt = document.createElement('option');
+        opt.value = String(id);
+        opt.textContent = label;
+        if (chosen.has(Number(id))) opt.selected = true;
+        catsSel.appendChild(opt);
+    });
+
+    return [
+        formGroup(t('GRAFIDA_LBL_FLEXI_TYPE'), typeSel),
+        formGroup(t('GRAFIDA_LBL_FLEXI_CATS'), catsSel),
+    ];
 }
 
 /**
@@ -3209,8 +3421,9 @@ function renderEditorSidebar(draft) {
  * here and the tree walk has a single implementation. An article with no
  * category sees everything, exactly as Joomla's own article form does.
  */
-function fieldsForCategory(fields, catid) {
-    const list = fields || [];
+function fieldsForCategory(fields, catid, flexiTypeId = 0) {
+    // A FLEXIcontent field belongs to content types, not categories: it is shown only for its types.
+    const list = (fields || []).filter(f => !Array.isArray(f.flexiTypeIds) || f.flexiTypeIds.includes(flexiTypeId));
     const id = Number(catid);
     if (!catid || !Number.isFinite(id) || id <= 0) return list;
     return list.filter(f => !Array.isArray(f.categoryIds) || f.categoryIds.includes(id));
@@ -3223,6 +3436,81 @@ function fieldsForCategory(fields, catid) {
  * and above all must not block publishing by being required (see
  * PublishService::guardRequiredUnsupportedFields()).
  */
+/**
+ * One custom field as a card that folds: a title line (label, a mark when required, and a short summary of the
+ * value while it is folded) over the control itself. Open or closed is remembered per field.
+ */
+function fieldCard(field, group, typeId) {
+    const card = document.createElement('details');
+    card.className = 'field-card' + (group.classList.contains('wide') ? ' wide' : '');
+    card.id = 'field-card-' + field.name;
+    card.dataset.fieldName = field.name;
+
+    const key = 'grafida.fc.' + (typeId || 0) + '.' + field.name;
+    let remembered = null;
+    try { remembered = window.localStorage.getItem(key); } catch {}
+    card.open = remembered === null ? true : remembered === '1';
+    card.addEventListener('toggle', () => {
+        try { window.localStorage.setItem(key, card.open ? '1' : '0'); } catch {}
+    });
+
+    const head = document.createElement('summary');
+    head.appendChild(el('span', 'field-card-title', field.label || field.name));
+    if (field.required) head.appendChild(el('span', 'field-card-required', '*'));
+    const hint = el('span', 'field-card-hint');
+    head.appendChild(hint);
+    const chevron = document.createElement('i');
+    chevron.className = 'fa-solid fa-chevron-down sb-section-chevron';
+    chevron.setAttribute('aria-hidden', 'true');
+    head.appendChild(chevron);
+    card.appendChild(head);
+
+    // The title line already names the field, so the group's own label is not repeated inside.
+    const label = group.querySelector(':scope > label');
+    const control = group.querySelector('input, select, textarea');
+    if (label && control && control.id) {
+        control.setAttribute('aria-label', label.textContent);
+    }
+    if (label) label.remove();
+    if (field.description) card.appendChild(el('p', 'field-card-description', field.description));
+    const body = el('div', 'field-card-body');
+    body.appendChild(group);
+    card.appendChild(body);
+
+    // A short summary of what the field holds, shown on the title line (always) and used to mark filled fields.
+    const refresh = () => {
+        const text = fieldSummary(field, body);
+        hint.textContent = text;
+        card.classList.toggle('filled', text !== '');
+    };
+    ['input', 'change', 'click'].forEach(evt => body.addEventListener(evt, () => setTimeout(refresh, 0)));
+    setTimeout(refresh, 0);
+
+    return card;
+}
+
+/** What a field currently holds, in a few words ('' when empty). */
+function fieldSummary(field, body) {
+    const el0 = body.querySelector('[id^="field-"]');
+    if (!el0) return '';
+    const short = (v) => { v = String(v || '').trim().replace(/\s+/g, ' '); return v.length > 40 ? v.slice(0, 40) + '…' : v; };
+
+    if (typeof el0._getMediaValue === 'function') {
+        const v = el0._getMediaValue();
+        const n = Array.isArray(v) ? v.length : (v ? 1 : 0);
+        return n === 0 ? '' : (n === 1 ? '1' : String(n));
+    }
+    if (el0.tagName === 'SELECT') return el0.value ? short(el0.selectedOptions[0] && el0.selectedOptions[0].textContent) : '';
+    if (el0.classList && (el0.classList.contains('radio-group') || el0.classList.contains('checkbox-group') || el0.querySelector('input[type=checkbox],input[type=radio]'))) {
+        const picked = [...el0.querySelectorAll('input:checked')].map(i => i.parentElement ? i.parentElement.textContent.trim() : i.value);
+        return short(picked.join(', '));
+    }
+    return short(el0.value);
+}
+
+/** Field types that fit in half the width; everything else (pictures, galleries, long text) spans the row. */
+const NARROW_FIELD_TYPES = ['text', 'calendar', 'integer', 'list', 'radio', 'url', 'email', 'color', 'checkboxes'];
+
 function renderCustomFields(draft) {
     const host = document.getElementById('editor-custom-fields');
     if (!host) return;
@@ -3230,8 +3518,8 @@ function renderCustomFields(draft) {
 
     const refs = cachedReferences(draft.siteId) || {};
     const all = refs.fields || { supported: [], unsupported: [] };
-    const supported = fieldsForCategory(all.supported, draft.catid);
-    const unsupported = fieldsForCategory(all.unsupported, draft.catid);
+    const supported = fieldsForCategory(all.supported, draft.catid, flexiTypeOf(draft));
+    const unsupported = fieldsForCategory(all.unsupported, draft.catid, flexiTypeOf(draft));
 
     // A field definition comes from the site verbatim, so one of them being a
     // shape we did not anticipate is a permanent possibility — and one that
@@ -3242,30 +3530,61 @@ function renderCustomFields(draft) {
     const undisplayable = [];
 
     if (supported.length > 0) {
-        const sec = el('div', null);
-        sec.appendChild(el('div', 'section-title', 'Custom Fields'));
+        const nodes = [];
         supported.forEach(field => {
             const val = (draft.fields || {})[field.name];
             try {
                 const fg = formGroup(field.label, buildFieldInput(field, val, draft.siteId));
                 fg.dataset.fieldName = field.name;
-                sec.appendChild(fg);
+                if (!NARROW_FIELD_TYPES.includes(field.type)) fg.classList.add('wide');
+                nodes.push({ field, node: fg });
             } catch (err) {
                 console.error('Grafida: custom field "' + field.name + '" could not be rendered', err);
                 undisplayable.push(field);
             }
         });
-        host.appendChild(sec);
+
+        // On a FLEXIcontent site the card is named after the type ("Video · Fields"), which is what the editor
+        // is filling in; otherwise it is the plain Joomla custom fields. Short inputs sit side by side; pictures,
+        // galleries and long text take the full width.
+        const flexiId = flexiTypeOf(draft);
+        const flexiType = ((refs.flexi && refs.flexi.types) || []).find(tp => Number(tp.id) === flexiId);
+        const title = flexiType ? flexiType.name + ' · ' + t('GRAFIDA_LBL_SB_FIELDS') : t('GRAFIDA_LBL_SB_FIELDS');
+        // Each field is a card of its own that folds away (the title line says what it holds while it is folded);
+        // Expand all / Collapse all sit above them.
+        const cardsHost = el('div', 'field-cards');
+        const cards = [];
+
+        nodes.forEach(({ field, node }) => {
+            const card = fieldCard(field, node, flexiId);
+            cards.push({ field, card });
+            cardsHost.appendChild(card);
+        });
+
+        const foldAll = (open) => cards.forEach(({ card }) => { card.open = open; });
+        const expand = el('button', 'btn btn-sm btn-secondary', t('GRAFIDA_BTN_EXPAND_ALL'));
+        const collapse = el('button', 'btn btn-sm btn-secondary', t('GRAFIDA_BTN_COLLAPSE_ALL'));
+        expand.type = collapse.type = 'button';
+        expand.addEventListener('click', () => foldAll(true));
+        collapse.addEventListener('click', () => foldAll(false));
+
+        const bar = el('div', 'field-jump-bar', el('span', 'field-jump-title', title), el('span', 'field-jump-actions', expand, collapse));
+        host.appendChild(bar);
+        host.appendChild(cardsHost);
     }
 
     const notEditable = [...unsupported, ...undisplayable];
 
     if (notEditable.length > 0) {
         const names = notEditable.map(f => f.label).join(', ');
-        host.appendChild(el('div', 'unsupported-fields-notice',
+        // Not editable here: kept out of the way in a closed group, the names one click away.
+        const notice = el('div', 'unsupported-fields-notice',
             ...formatNodes(t('GRAFIDA_MSG_UNSUPPORTED_FIELDS'), names)
-        ));
+        );
+        host.appendChild(notice);
     }
+
+    syncEditorTabs();
 }
 
 // Site picker for the open draft. Changing it moves the draft to another site;
@@ -3633,8 +3952,10 @@ function buildFieldInput(field, currentValue, siteId) {
             });
             return sel;
         }
+        case 'file':
+            return buildFileFieldInput(name, currentValue, siteId);
         case 'media':
-            return buildMediaFieldInput(name, currentValue, siteId);
+            return field.multiple ? buildGalleryFieldInput(name, currentValue, siteId) : buildMediaFieldInput(name, currentValue, siteId);
         case 'radio': {
             const wrap = el('div', 'radio-group');
             wrap.id = name;
@@ -5221,6 +5542,191 @@ function buildMediaFieldInput(id, currentValue, siteId) {
     return wrap;
 }
 
+/**
+ * The editor control for a file field (documents, audio, video, archives): a list of the files the item holds.
+ * Files already on the site are listed by name; new ones are picked from this computer (several at once) and are
+ * uploaded to the site's file manager on publish. The list is the whole field: removing a row removes that file
+ * from the item (the file itself stays in the site's file manager), and the order is kept.
+ */
+function buildFileFieldInput(id, currentValue, siteId) {
+    const decode = (raw) => {
+        if (raw && typeof raw === 'object') return raw;
+        try { const parsed = JSON.parse(String(raw)); return parsed && typeof parsed === 'object' ? parsed : null; } catch { return null; }
+    };
+    const items = (Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []))
+        .map(decode)
+        .filter(rec => rec && (rec.id || rec.media));
+
+    const wrap = el('div', 'file-field');
+    wrap.id = id;
+    wrap._getMediaValue = () => items.map(rec => JSON.stringify(rec));
+
+    const render = () => {
+        clearNode(wrap);
+
+        if (items.length) {
+            const list = el('ul', 'file-list');
+            items.forEach((rec, index) => {
+                const row = el('li', 'file-row');
+                row.appendChild(icon(rec.media ? 'file-arrow-up' : 'file'));
+                row.appendChild(el('span', 'file-name', rec.name || String(rec.id || '')));
+                if (rec.media) row.appendChild(el('span', 'file-badge', t('GRAFIDA_LBL_FILE_NEW')));
+
+                const tool = (name, label, onClick, disabled = false) => {
+                    const b = el('button', 'btn btn-sm btn-secondary btn-icon-only', icon(name));
+                    b.type = 'button';
+                    b.title = label;
+                    b.setAttribute('aria-label', label);
+                    b.disabled = disabled;
+                    b.addEventListener('click', onClick);
+                    return b;
+                };
+                const swap = (to) => { [items[index], items[to]] = [items[to], items[index]]; render(); };
+                const tools = el('span', 'file-tools',
+                    tool('arrow-up', t('GRAFIDA_BTN_GALLERY_MOVE_EARLIER'), () => swap(index - 1), index === 0),
+                    tool('arrow-down', t('GRAFIDA_BTN_GALLERY_MOVE_LATER'), () => swap(index + 1), index === items.length - 1),
+                    tool('xmark', t('GRAFIDA_BTN_CLEAR_IMAGE'), () => { items.splice(index, 1); render(); }),
+                );
+                row.appendChild(tools);
+                list.appendChild(row);
+            });
+            wrap.appendChild(list);
+        }
+
+        const add = iconBtn('file-circle-plus', t('GRAFIDA_BTN_FILES_ADD'), 'btn', 'btn-sm', 'btn-secondary');
+        add.addEventListener('click', async () => {
+            add.disabled = true;
+            try {
+                const picked = await api.openFile('any', true);
+                const files = picked && Array.isArray(picked.files) ? picked.files : [];
+                for (const file of files) {
+                    try {
+                        const stored = await api.uploadMedia(siteId, {
+                            filename: file.name, mime: file.mime || 'application/octet-stream',
+                            dataBase64: file.dataBase64, draftId: State.currentDraftId,
+                        });
+                        items.push({ media: stored.id, name: file.name });
+                    } catch (err) {
+                        showToast(file.name + ': ' + err.message, 'error');
+                    }
+                }
+            } catch (err) {
+                showToast(err.message, 'error');
+            }
+            render();
+        });
+        wrap.appendChild(el('div', 'gallery-actions', add, el('span', 'gallery-hint', t('GRAFIDA_MSG_FILES_HINT'))));
+        // Let the field card update its summary line.
+        queueMicrotask(() => wrap.dispatchEvent(new Event('change', { bubbles: true })));
+    };
+    render();
+
+    return wrap;
+}
+
+/**
+ * The editor control for a gallery: a media field that holds several pictures (a FLEXIcontent image field with
+ * multiple values). Pictures are added from the media browser (offline files included, uploaded on publish), shown
+ * as a grid of thumbnails each with its own alt text, and can be reordered or removed before publishing.
+ * Pictures already on the site are not listed here: an update only ever ADDS to the gallery, so none is lost.
+ */
+function buildGalleryFieldInput(id, currentValue, siteId) {
+    // The draft holds the field as a list of media records (each a JSON string, as for a single media field).
+    let items = (Array.isArray(currentValue) ? currentValue : (currentValue ? [currentValue] : []))
+        .map(decodeMediaFieldValue)
+        .filter(record => record.imagefile !== '');
+
+    const wrap = el('div', 'gallery-field');
+    wrap.id = id;
+    wrap._getMediaValue = () => items.map(encodeMediaFieldValue).filter(v => v !== '');
+
+    const render = () => {
+        clearNode(wrap);
+
+        const grid = el('div', 'gallery-grid');
+        items.forEach((record, index) => {
+            const card = el('div', 'gallery-item');
+
+            const thumb = el('div', 'gallery-thumb');
+            const src = mediaFieldPreviewUrl(record.imagefile, siteId);
+            if (src) {
+                const img = document.createElement('img');
+                img.alt = '';
+                img.src = src;
+                thumb.appendChild(img);
+            } else {
+                thumb.appendChild(el('span', 'image-preview-empty', t('GRAFIDA_MSG_NO_IMAGE')));
+            }
+            thumb.appendChild(el('span', 'gallery-order', String(index + 1)));
+            card.appendChild(thumb);
+
+            const alt = document.createElement('input');
+            alt.type = 'text';
+            alt.className = 'form-control';
+            alt.placeholder = t('GRAFIDA_LBL_IMAGE_ALT');
+            alt.setAttribute('aria-label', t('GRAFIDA_LBL_IMAGE_ALT'));
+            alt.value = record.alt_text;
+            alt.addEventListener('input', () => { record.alt_text = alt.value; });
+            card.appendChild(alt);
+
+            const tools = el('div', 'gallery-tools');
+            const move = (by) => {
+                const to = index + by;
+                if (to < 0 || to >= items.length) return;
+                [items[index], items[to]] = [items[to], items[index]];
+                render();
+            };
+            // Icon-only buttons: a card is narrow, the label travels as the tooltip and the accessible name.
+            const iconOnly = (name, label) => {
+                const b = el('button', 'btn btn-sm btn-secondary btn-icon-only', icon(name));
+                b.type = 'button';
+                b.title = label;
+                b.setAttribute('aria-label', label);
+                return b;
+            };
+            const left = iconOnly('arrow-left', t('GRAFIDA_BTN_GALLERY_MOVE_EARLIER'));
+            left.disabled = index === 0;
+            left.addEventListener('click', () => move(-1));
+            const right = iconOnly('arrow-right', t('GRAFIDA_BTN_GALLERY_MOVE_LATER'));
+            right.disabled = index === items.length - 1;
+            right.addEventListener('click', () => move(1));
+            const remove = iconOnly('xmark', t('GRAFIDA_BTN_CLEAR_IMAGE'));
+            remove.addEventListener('click', () => { items.splice(index, 1); render(); });
+            tools.append(left, right, remove);
+            card.appendChild(tools);
+
+            grid.appendChild(card);
+        });
+
+        if (items.length) wrap.appendChild(grid);
+
+        const add = iconBtn('images', t('GRAFIDA_BTN_GALLERY_ADD'), 'btn', 'btn-sm', 'btn-secondary');
+        add.addEventListener('click', async () => {
+            const picks = await openMediaBrowser(siteId, { allowUpload: true, multiple: true });
+            (Array.isArray(picks) ? picks : []).forEach(picked => {
+                if (!picked || typeof picked.url !== 'string' || picked.url === '') return;
+
+                const record = decodeMediaFieldValue('');
+                if (picked.mediaId) {
+                    const ref = MEDIA_REF_PREFIX + picked.mediaId;
+                    State.mediaPreviews[ref] = picked.url;
+                    record.imagefile = ref;
+                } else {
+                    record.imagefile = relativeImagePath(picked.url, siteId);
+                }
+                items.push(record);
+            });
+            render();
+        });
+        wrap.appendChild(el('div', 'gallery-actions', add, el('span', 'gallery-hint', t('GRAFIDA_MSG_GALLERY_HINT'))));
+        // Let the field card update its summary line.
+        queueMicrotask(() => wrap.dispatchEvent(new Event('change', { bubbles: true })));
+    };
+    render();
+
+    return wrap;
+}
+
 /** One rendering of the media-field control, over the shared record. */
 function buildMediaFieldBody(record, siteId, rerender) {
     const frag = document.createDocumentFragment();
@@ -5350,6 +5856,36 @@ async function uploadLocalImage(siteId, cb) {
         showToast(err.message, 'error');
         cb(null);
     }
+}
+
+/**
+ * Like uploadLocalImage(), but the native dialog takes several files: each is stored offline and `cb` receives the
+ * list of `{url, name, mediaId}` entries (empty when cancelled). A file that fails to store is reported and skipped.
+ */
+async function uploadLocalImages(siteId, cb) {
+    let picked;
+    try {
+        picked = await api.openFile('image', true);
+    } catch (err) {
+        showToast(err.message, 'error');
+        cb([]);
+        return;
+    }
+    const files = picked && Array.isArray(picked.files) ? picked.files : [];
+    const entries = [];
+
+    for (const file of files) {
+        try {
+            const result = await api.uploadMedia(siteId, {
+                filename: file.name, mime: file.mime || 'image/png',
+                dataBase64: file.dataBase64, draftId: State.currentDraftId,
+            });
+            entries.push({ url: result.url, name: file.name, mediaId: result.id });
+        } catch (err) {
+            showToast(file.name + ': ' + err.message, 'error');
+        }
+    }
+    cb(entries);
 }
 
 /** Pick a local image file, store it offline, and set it as the kind's image. */
@@ -5678,8 +6214,28 @@ function openMediaBrowser(siteId, opts = {}) {
 
         const container = el('div', 'media-browser', tabsBar, sitePanel, localPanel);
 
+        // `opts.multiple`: clicking a picture ticks it instead of choosing it, and the dialog resolves with the list
+        // of ticked entries (an array; empty when cancelled) once "Add" is pressed.
+        const multiple = opts.multiple === true;
+        const chosen = [];
+        const addBtn = multiple ? iconBtn('check', t('GRAFIDA_BTN_GALLERY_ADD'), 'btn', 'btn-primary') : null;
+        const refreshAdd = () => {
+            if (!addBtn) return;
+            addBtn.disabled = chosen.length === 0;
+            setIconBtnLabel(addBtn, 'check', chosen.length ? t('GRAFIDA_BTN_GALLERY_ADD') + ' (' + chosen.length + ')' : t('GRAFIDA_BTN_GALLERY_ADD'));
+        };
+        // One click on a picture: choose it (single mode) or tick/untick it (multiple mode).
+        const pick = (item, entry) => {
+            if (!multiple) { finish(entry); return; }
+            const at = chosen.findIndex(c => c.key === entry.key);
+            if (at >= 0) chosen.splice(at, 1); else chosen.push(entry);
+            item.classList.toggle('selected', at < 0);
+            item.setAttribute('aria-pressed', at < 0 ? 'true' : 'false');
+            refreshAdd();
+        };
+
         let settled = false;
-        const escHandler = (e) => { if (e.key === 'Escape') finish(null); };
+        const escHandler = (e) => { if (e.key === 'Escape') finish(multiple ? [] : null); };
         const finish = (val) => {
             if (settled) return;
             settled = true;
@@ -5734,7 +6290,7 @@ function openMediaBrowser(siteId, opts = {}) {
                     item.appendChild(im);
                 }
                 item.appendChild(el('span', 'media-item-name', f.name || ''));
-                item.addEventListener('click', () => finish(f));
+                item.addEventListener('click', () => pick(item, multiple ? Object.assign({}, f, { key: 'site:' + (f.path || f.url || f.name) }) : f));
                 grid.appendChild(item);
             });
         }
@@ -5763,7 +6319,9 @@ function openMediaBrowser(siteId, opts = {}) {
             localLoaded = true;
 
             clearNode(localGrid);
-            const entries = Array.isArray(data.entries) ? data.entries : [];
+            // Local files that are not pictures (documents waiting to be uploaded to a file field) are not offered here.
+            const entries = (Array.isArray(data.entries) ? data.entries : [])
+                .filter(en => /\.(png|jpe?g|gif|webp|svg|bmp|avif)$/i.test(String(en.filename || '')));
             if (entries.length === 0) {
                 localGrid.appendChild(el('div', 'media-browser-empty', t('GRAFIDA_MSG_LOCAL_MEDIA_EMPTY')));
                 return;
@@ -5779,7 +6337,7 @@ function openMediaBrowser(siteId, opts = {}) {
                 if (entry.width && entry.height) {
                     item.appendChild(el('span', 'media-item-dims', entry.width + ' × ' + entry.height));
                 }
-                item.addEventListener('click', () => finish({ url: entry.url, name: entry.filename, mediaId: entry.id }));
+                item.addEventListener('click', () => pick(item, { url: entry.url, name: entry.filename, mediaId: entry.id, key: 'local:' + entry.id }));
                 localGrid.appendChild(item);
             });
         }
@@ -5788,13 +6346,23 @@ function openMediaBrowser(siteId, opts = {}) {
         if (opts.allowUpload) {
             const uploadBtn = iconBtn('upload', t('GRAFIDA_BTN_CHOOSE_FILE'), 'btn', 'btn-secondary');
             uploadBtn.addEventListener('click', () => {
-                uploadLocalImage(siteId, (entry) => { if (entry) finish(entry); });
+                if (multiple) {
+                    // Files chosen from this computer are added together with any pictures already ticked.
+                    uploadLocalImages(siteId, (entries) => { if (entries.length) finish([...chosen, ...entries]); });
+                } else {
+                    uploadLocalImage(siteId, (entry) => { if (entry) finish(entry); });
+                }
             });
             footer.push(uploadBtn);
         }
         const cancelBtn = iconBtn('xmark', t('GRAFIDA_BTN_CANCEL'), 'btn', 'btn-secondary');
-        cancelBtn.addEventListener('click', () => finish(null));
+        cancelBtn.addEventListener('click', () => finish(multiple ? [] : null));
         footer.push(cancelBtn);
+        if (addBtn) {
+            addBtn.addEventListener('click', () => finish(chosen.slice()));
+            footer.push(addBtn);
+            refreshAdd();
+        }
 
         document.addEventListener('keydown', escHandler, true);
         showModal(t('GRAFIDA_LBL_MEDIA_BROWSER'), container, footer);
@@ -7007,7 +7575,7 @@ function collectDraftFormData() {
         } else if (field.type === 'radio') {
             const checked = fieldEl.querySelector('input[type="radio"]:checked');
             fields[field.name] = checked ? checked.value : '';
-        } else if (field.type === 'media') {
+        } else if (field.type === 'media' || field.type === 'file') {
             // Three inputs collapsing into one JSON record, so the control
             // hands it over itself rather than exposing a `.value`.
             fields[field.name] = fieldEl._getMediaValue ? fieldEl._getMediaValue() : '';
@@ -7015,6 +7583,21 @@ function collectDraftFormData() {
             fields[field.name] = fieldEl.value;
         }
     });
+
+    // FLEXIcontent site: the chosen content type and secondary categories ride along in the fields map.
+    const flexiTypeEl = document.getElementById('editor-flexi-type');
+    if (flexiTypeEl) {
+        const flexiCatsEl = document.getElementById('editor-flexi-cats');
+        const typeId = flexiTypeEl.value ? parseInt(flexiTypeEl.value, 10) : 0;
+        if (typeId > 0) {
+            fields._flexi = {
+                typeId,
+                cats: flexiCatsEl ? [...flexiCatsEl.selectedOptions].map(o => parseInt(o.value, 10)).filter(n => n > 0) : [],
+            };
+        } else {
+            delete fields._flexi;
+        }
+    }
 
     const tagsWrapper = document.getElementById('tags-input-wrapper');
     const tags = tagsWrapper && tagsWrapper._getTags ? tagsWrapper._getTags() : [];
@@ -7203,12 +7786,51 @@ function isSettingsShortcut(e) {
 // --------------------------------------------------------
 
 /**
+ * Checks that a main category is chosen. When it is not, the Category field is marked, scrolled to and focused and a
+ * message says why, and false is returned so the caller stops. The mark clears as soon as a category is chosen.
+ */
+function requireCategory() {
+    const select = document.getElementById('editor-catid');
+    if (!select || select.value) return true;
+
+    const group = select.closest('.form-group');
+    select.classList.add('is-invalid');
+    select.setAttribute('aria-invalid', 'true');
+    if (group && !group.querySelector('.field-error')) {
+        const message = el('div', 'field-error', t('GRAFIDA_MSG_CATEGORY_REQUIRED'));
+        message.id = 'editor-catid-error';
+        message.setAttribute('role', 'alert');
+        select.setAttribute('aria-describedby', message.id);
+        group.appendChild(message);
+    }
+    select.addEventListener('change', () => {
+        select.classList.remove('is-invalid');
+        select.removeAttribute('aria-invalid');
+        select.removeAttribute('aria-describedby');
+        const old = document.getElementById('editor-catid-error');
+        if (old) old.remove();
+    }, { once: true });
+
+    // The Category field lives in the sidebar's first group; make sure that group is open and the field in view.
+    const section = select.closest('details');
+    if (section) section.open = true;
+    select.scrollIntoView({ block: 'center' });
+    select.focus({ preventScroll: true });
+    showToast(t('GRAFIDA_MSG_CATEGORY_REQUIRED'), 'error', 6000);
+
+    return false;
+}
+
+/**
  * Publishes the open draft, saving it first.
  *
  * `force` is only ever passed by the "Publish anyway" button of the dialog
  * below, i.e. by a user answering a publish_blocked whose `canForce` was true.
  */
 async function publishDraft(force = false) {
+    // An article has to be filed under a category to be published: say so before anything is saved or sent.
+    if (!requireCategory()) return;
+
     let saved;
     try { saved = await saveDraft(); } catch { return; }
     if (!saved || State.currentDraftId == null) return;
@@ -9885,6 +10507,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const btnImportDraft = document.getElementById('btn-import-draft');
     if (btnImportDraft) btnImportDraft.addEventListener('click', importDraftAsNew);
+
+    // Tabs above the writing area (Content | Fields & media | Settings).
+    document.querySelectorAll('#editor-tabs [data-editor-tab]').forEach(btn => {
+        btn.addEventListener('click', () => setEditorTab(btn.dataset.editorTab));
+        btn.addEventListener('keydown', ev => {
+            if (ev.key !== 'ArrowRight' && ev.key !== 'ArrowLeft') return;
+            const visible = [...document.querySelectorAll('#editor-tabs [data-editor-tab]')].filter(b => !b.classList.contains('hidden'));
+            const at = visible.indexOf(btn);
+            const next = visible[(at + (ev.key === 'ArrowRight' ? 1 : visible.length - 1)) % visible.length];
+            if (next) { setEditorTab(next.dataset.editorTab); next.focus(); }
+        });
+    });
 
     const btnSaveDraft = document.getElementById('btn-save-draft');
     if (btnSaveDraft) btnSaveDraft.addEventListener('click', saveDraft);
