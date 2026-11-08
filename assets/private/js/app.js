@@ -9746,7 +9746,7 @@ function renderUpdateNotice() {
     const msg = el('span', 'update-msg', t('GRAFIDA_MSG_UPDATE_AVAILABLE'));
 
     const downloadBtn = iconBtn('download', t('GRAFIDA_BTN_DOWNLOAD'), 'btn', 'btn-sm', 'btn-success');
-    const url = update.infoURL || update.download;
+    const url = update.download || update.infoURL;
     downloadBtn.disabled = !url;
     downloadBtn.addEventListener('click', async () => {
         if (!url) return;

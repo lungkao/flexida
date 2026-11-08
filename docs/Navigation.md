@@ -60,7 +60,7 @@ Please note that the Help page displays a snapshot of the documentation for the 
 
 _Not shown in the screenshot at the top of the page_.
 
-Below the Menu and towards the bottom of the window you will see an update notification _if there is a newer version available_. Clicking on it will take you to the download page for the latest version of Grafida. You can then download and install it. Remember to close and restart Grafida!
+Below the Menu and towards the bottom of the window you will see an update notification _if there is a newer version available_. The app checks the Flexida releases on GitHub by itself when it starts (at most once every 12 hours). Clicking the notice downloads the build for your operating system and CPU; unzip or install it over the old one. Remember to close and restart the app!
 
 ## Version information
 

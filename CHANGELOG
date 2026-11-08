@@ -1,5 +1,6 @@
-Grafida 0.2.2
+Grafida 0.2.3
 ================================================================================
++ Update check now reads the Flexida releases on GitHub (it used to ask the upstream Grafida site) and the update notice downloads the file for your OS and CPU
 + Distraction-free mode in the article editor: hides the sidebars, toolbar and title so only the editor remains
 ~ Settings is split into General, Editor, AI Assistant and Advanced tabs; long explanations fold away
 ~ Connection test no longer tries the never-valid /index.php/api URL

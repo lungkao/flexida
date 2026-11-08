@@ -17,10 +17,10 @@ use Grafida\Http\Transport;
 /**
  * Checks whether a newer version of Grafida is available.
  *
- * The update information is published to the CDN as a small JSON document (built
- * at release time by the {@see \tasks\UpdateJson} Phing task) describing the
- * latest stable release: its {@code version}, {@code infoURL} (the GitHub release
- * page) and {@code download} URL.
+ * Flexida reads the list of GitHub releases of lungkao/flexida and picks the newest published
+ * one (prereleases included). Its {@code infoURL} is the release page and {@code download} is the
+ * release file for this OS and CPU (falling back to the release page). Only links under
+ * https://github.com/lungkao/flexida/ are ever returned.
  *
  * To avoid hammering the CDN, the fetched document is cached in a per-user file
  * and only refreshed when that file is older than 12 hours (the "last fetched"
@@ -31,7 +31,10 @@ use Grafida\Http\Transport;
 final class UpdateService
 {
     /** Canonical URL the release pipeline publishes the update information to. */
-    public const UPDATE_URL = 'https://grafida.app/updates/grafida.json';
+    public const UPDATE_URL = 'https://api.github.com/repos/lungkao/flexida/releases?per_page=10';
+
+    /** Only links under this prefix are ever offered to the user as a download. */
+    private const TRUSTED_PREFIX = 'https://github.com/lungkao/flexida/';
 
     /** Refresh the cached information at most once every 12 hours. */
     private const MAX_AGE = 12 * 60 * 60;
@@ -41,7 +44,22 @@ final class UpdateService
         private readonly string $currentVersion,
         private readonly string $cacheFile,
         private readonly string $updateUrl = self::UPDATE_URL,
+        private readonly ?string $platform = null,
     ) {}
+
+    /** Platform token used in release file names, e.g. {@code macos-arm64}, {@code windows-amd64}. */
+    public static function detectPlatform(): string
+    {
+        $arch = strtolower(php_uname('m'));
+        $arch = in_array($arch, ['arm64', 'aarch64'], true) ? 'arm64' : 'amd64';
+        $os   = match (PHP_OS_FAMILY) {
+            'Darwin'  => 'macos',
+            'Windows' => 'windows',
+            default   => 'linux',
+        };
+
+        return $os . '-' . $arch;
+    }
 
     /**
      * Returns the update status, refreshing the cache from the CDN when stale.
@@ -65,7 +83,12 @@ final class UpdateService
             $age = time() - (int) @filemtime($this->cacheFile);
 
             if ($age >= 0 && $age < self::MAX_AGE) {
-                return $this->readCache();
+                $cached = $this->readCache();
+
+                // A cache written for another update source (e.g. the upstream project's) is not ours.
+                if (($cached['source'] ?? null) === $this->updateUrl) {
+                    return $cached;
+                }
             }
         }
 
@@ -85,15 +108,15 @@ final class UpdateService
     {
         try {
             $response = $this->http->request('GET', $this->updateUrl, [
-                'Accept'     => 'application/json',
+                'Accept'     => 'application/vnd.github+json',
                 'User-Agent' => 'Grafida/' . $this->currentVersion,
             ]);
 
             if ($response->isSuccess()) {
-                $data = json_decode($response->body, true);
+                $data = $this->normalise(json_decode($response->body, true));
 
-                if (is_array($data)) {
-                    $this->writeCache($response->body);
+                if ($data !== null) {
+                    $this->writeCache((string) json_encode($data));
 
                     return $data;
                 }
@@ -103,13 +126,78 @@ final class UpdateService
         }
 
         if (is_file($this->cacheFile)) {
-            return $this->readCache();
+            $cached = $this->readCache();
+
+            if (($cached['source'] ?? null) === $this->updateUrl) {
+                return $cached;
+            }
         }
 
         // No cache and the fetch failed: record the attempt with an empty document.
-        $this->writeCache('{}');
+        $this->writeCache((string) json_encode(['source' => $this->updateUrl]));
 
         return [];
+    }
+
+    /**
+     * Reduces the GitHub "list releases" answer to {version, infoURL, download} for the newest
+     * published release (prereleases included: Flexida's releases are all experimental).
+     *
+     * @return array<string, mixed>|null null when the document is not a release list at all
+     */
+    private function normalise(mixed $data): ?array
+    {
+        if (!is_array($data) || !array_is_list($data)) {
+            return null;
+        }
+
+        $best = null;
+
+        foreach ($data as $release) {
+            if (!is_array($release) || ($release['draft'] ?? false) === true || !is_string($release['tag_name'] ?? null)) {
+                continue;
+            }
+
+            $version = ltrim($release['tag_name'], 'vV');
+
+            if ($version === '' || preg_match('/^\d+(\.\d+)*$/', $version) !== 1) {
+                continue;
+            }
+
+            if ($best === null || version_compare($version, $best['version'], '>')) {
+                $best = ['version' => $version, 'release' => $release];
+            }
+        }
+
+        $doc = ['source' => $this->updateUrl];
+
+        if ($best === null) {
+            return $doc;
+        }
+
+        $release = $best['release'];
+        $info    = is_string($release['html_url'] ?? null) ? $release['html_url'] : '';
+        $info    = str_starts_with($info, self::TRUSTED_PREFIX) ? $info : '';
+        $token   = '-' . ($this->platform ?? self::detectPlatform());
+        $asset   = '';
+
+        foreach (is_array($release['assets'] ?? null) ? $release['assets'] : [] as $a) {
+            $name = is_array($a) && is_string($a['name'] ?? null) ? $a['name'] : '';
+            $url  = is_array($a) && is_string($a['browser_download_url'] ?? null) ? $a['browser_download_url'] : '';
+
+            if ($name !== '' && str_contains($name, $token) && !str_ends_with($name, '.sha256')
+                && str_starts_with($url, self::TRUSTED_PREFIX)) {
+                $asset = $url;
+
+                break;
+            }
+        }
+
+        return $doc + [
+            'version'  => $best['version'],
+            'infoURL'  => $info,
+            'download' => $asset !== '' ? $asset : $info,
+        ];
     }
 
     /** @return array<array-key, mixed> */
